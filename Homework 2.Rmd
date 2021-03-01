@@ -1,7 +1,7 @@
 ---
 title: "Homework #2"
 author: "David Nemirovsky"
-output: html_document
+output: pdf_document
 date: 2/28/21
 --- 
 
@@ -32,7 +32,7 @@ scale_fill_discrete = scale_fill_viridis_d
 set.seed(37564)
 ```
 
-In this exercise, we build nonlinear models using the \College" data. The dataset contains statistics for 565 US Colleges from the 1995 issue of US News and World Report. The response variable is the out-of-state tuition (Outstate). The predictors are:
+In this exercise, we build nonlinear models using the "College" data. The dataset contains statistics for 565 US Colleges from the 1995 issue of US News and World Report. The response variable is the out-of-state tuition (Outstate). The predictors are:
 
 + Apps: Number of applications received
 
