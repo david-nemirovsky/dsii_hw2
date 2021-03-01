@@ -1,0 +1,211 @@
+---
+title: "Homework #1"
+author: "David Nemirovsky"
+output: pdf_document
+date: 2/28/21
+--- 
+
+```{r setup, include = FALSE}
+library(tidyverse)
+library(caret) 
+library(splines)
+library(mgcv)
+library(pdp)
+library(earth)
+
+knitr::opts_chunk$set(
+  fig.width = 7,
+  fig.asp = .6,
+  out.width = "95%"
+)
+
+theme_set(theme_minimal() + theme(legend.position = "bottom"))
+
+options(
+  ggplot2.continuous.colour = "viridis",
+  ggplot2.continuous.fill = "viridis"
+)
+
+scale_colour_discrete = scale_colour_viridis_d
+scale_fill_discrete = scale_fill_viridis_d
+
+set.seed(37564)
+```
+
+In this exercise, we build nonlinear models using the \College" data. The dataset contains statistics for 565 US Colleges from the 1995 issue of US News and World Report. The response variable is the out-of-state tuition (Outstate). The predictors are:
+
++ Apps: Number of applications received
+
++ Accept: Number of applications accepted
+
++ Enroll: Number of new students enrolled
+
++ Top10perc: Pct. new students from top 10% of H.S. class
+
++ Top25perc: Pct. new students from top 25% of H.S. class
+
++ F.Undergrad: Number of fulltime undergraduates
+
++ P.Undergrad: Number of parttime undergraduates
+
++ Room.Board: Room and board costs
+
++ Books: Estimated book costs
+
++ Personal: Estimated personal spending
+
++ PhD: Pct. of faculty with Ph.D.'s
+
++ Terminal: Pct. of faculty with terminal degree
+
++ S.F.Ratio: Student/faculty ratio
+
++ perc.alumni: Pct. alumni who donate
+
++ Expend: Instructional expenditure per student
+
++ Grad.Rate: Graduation rate
+
+## a) **EDA**
+
++ Read in data and create scatter plots of response (out-of-state tuition) vs predictor for each predictor stated above:
+
+```{r eda, message = F}
+college_df = 
+  read_csv("College.csv") %>% 
+  janitor::clean_names() %>% 
+  drop_na()
+
+x = model.matrix(outstate ~ . -college, college_df)[ ,-1]
+y = college_df$outstate
+
+theme1 = trellis.par.get()
+theme1$plot.symbol$col = rgb(.2, .4, .2, .5)
+theme1$plot.symbol$pch = 16
+theme1$plot.line$col = rgb(.8, .1, .1, 1)
+theme1$plot.line$lwd = 2
+theme1$strip.background$col = rgb(.0, .2, .6, .2)
+trellis.par.set(theme1)
+featurePlot(x, y, plot = "scatter", labels = c("", "Out of State Tuition"), type = c("p"), layout = c(4, 2))
+```
+
++ According to the above plots, percentage of new students from top 25% of H.S. class, percentage of new students from top 10% of H.S. class, room and board costs, student/faculty ratio, percentage of alumni who donate, instructional expenditure per student, graduation rate, percentage of faculty with Ph.D.’s, and percentage of faculty with terminal degrees seem to be the variables that are moderately- to highly-correlated with out-of-state tuition. All of the aforementioned variables showed a positive correlation with the exception of student/faculty ratio.
+
+## **b) Predicting Out-of-State Tuition Using Smoothing Spline Model of Percentage of Faculty with a Terminal Degree**
+
++ First, plot smoothing spline models with varying degrees of freedom (1-6):
+
+```{r df vary}
+term_grid = seq(range(college_df$terminal)[1], range(college_df$terminal)[2])
+
+ss_df = 
+  tibble(deg_free = 1:6) %>% 
+  mutate(
+    ss_mod = map(.x = deg_free, ~smooth.spline(college_df$terminal, college_df$outstate, df = .x)), 
+    pred = map(.x = ss_mod, ~predict(.x, x = term_grid))) %>% 
+  select(deg_free, pred) %>% 
+  unnest(pred) %>% 
+  unnest() %>% 
+  filter(pred > 100) %>% 
+  mutate(
+    term = c(rep(term_grid, 6)), 
+    deg_free = as.factor(deg_free)
+  )
+
+college_df %>% 
+  ggplot(aes(x = terminal, y = outstate)) + 
+  geom_point(alpha = .5) + 
+  geom_line(aes(x = term, y = pred, color = deg_free), data = ss_df) + 
+  labs(title = "Out-of-State Tuition vs % Faculty with Terminal Degree Smoothing Spline Model by Degrees of Freedom", 
+       x = "Faculty with a Terminal Degree (%)", 
+       y = "Out-of-State Tuition ($)")
+```
+
++ Using an arbitrary range of degrees of freedom from 1 to 6, it can be seen that an adequate number of degrees of freedom would lie between 4 and 5, as the lower values (1-3) don't fit the data well and having 6 degrees of freedom results in a model that is not as smooth.
+
++ Next, use generalized cross-validation (GCV) to select degrees of freedom:
+
+```{r gcv df}
+ss_gcv = smooth.spline(college_df$terminal, college_df$outstate)
+
+gcv_df = 
+  tibble(pred = map(.x = term_grid, ~predict(ss_gcv, .x))) %>% 
+  unnest(pred) %>% 
+  unnest() %>% 
+  filter(pred > 100) %>% 
+  mutate(term = term_grid)
+
+college_df %>% 
+  ggplot(aes(x = terminal, y = outstate)) + 
+  geom_point(alpha = .5) + 
+  geom_line(aes(x = term, y = pred), data = gcv_df) + 
+  labs(title = "Out-of-State Tuition vs % Faculty with Terminal Degree Smoothing Spline Model Using GCV", 
+       x = "Faculty with a Terminal Degree (%)", 
+       y = "Out-of-State Tuition ($)")
+```
+
++ The chosen number of degrees of freedom using GCV is **`r round(ss_gcv$df, 2)`**. This results in the smoothest model for predicting out-of-stat tuition using percentage of faculty with a terminal degree.
+
+## c) ** Fitting a Generalized Additive Model (GAM) Using All Predictors**
+
++ Generate GAM models using all predictors:
+
+```{r gam}
+gam_all = gam(outstate ~ apps + accept + enroll + top10perc + top25perc + f_undergrad + p_undergrad + room_board + books + personal + ph_d + terminal + s_f_ratio + perc_alumni + expend + grad_rate, data = college_df)
+
+gam_int = gam(outstate ~ apps + accept + enroll + te(top10perc, top25perc) + f_undergrad + p_undergrad + room_board + books + personal + ph_d + terminal + s_f_ratio + perc_alumni + expend + grad_rate, data = college_df)
+
+gam_smooth = gam(outstate ~ apps + accept + enroll + top10perc + top25perc + f_undergrad + p_undergrad + room_board + books + personal + s(ph_d) + s(terminal) + s_f_ratio + perc_alumni + expend + grad_rate, data = college_df)
+
+gam_fin = gam_inter = gam(outstate ~ apps + accept + enroll + te(top10perc, top25perc) + f_undergrad + p_undergrad + room_board + books + personal + s(ph_d) + s(terminal) + s_f_ratio + perc_alumni + expend + grad_rate, data = college_df)
+
+anova(gam_all, gam_int, gam_smooth, gam_fin, test = "F")
+```
+
++ According to the above F-test of the four hypothesized models, the model that accounted for the interaction between percentage of new students from top 10% of H.S. class and percentage of new students from top 25% of H.S. class, and the nonparametric variables of percentage of faculty with Ph.D.’s and percentage of faculty with terminal degrees fit the best GAM. Smoothing splines were used to account for the latter two variables.
+
++ Now, plot the GAM:
+
+```{r gam plot}
+vis.gam(gam_fin, view = c("top10perc", 'top25perc'), color = "topo")
+```
+
++ Summary of model:
+
+```{r gam summ}
+summary(gam_fin)
+```
+
++ **According to the final GAM at the 10% significance level, number of applications accepted, number of applications enrolled, room and board costs, estimated personal spending, percentage of alumni who donate, instructional expenditure per student, graduation rate, percentage of new students from top 25% of H.S. class, percentage of new students from top 10% of H.S. class, and the smoothing splines of percentage of faculty with Ph.D.’s and percentage of faculty with terminal degrees were all found to be significant predictors of out-of-state tuition.**
+
+## **d) Fit a Multivariate Adaptive Regression Spline (MARS) Model Using All Predictors**
+
++ First, fit MARS models to determine best one:
+
+```{r mars mods}
+mars_grid = expand.grid(degree = 1:3, 
+                         nprune = 2:18)
+ctrl = trainControl(method = "cv", number = 10)
+set.seed(37564)
+
+mars_fit <- train(x, y,
+                  method = "earth",
+                  tuneGrid = mars_grid,
+                  trControl = ctrl)
+
+ggplot(mars_fit)
+
+mars_fit$bestTune
+
+coef(mars_fit$finalModel)
+```
+
++ According to the above RMSE plot with varying degrees and number of terms, it appears as though the MARS model with **`r mars_fit$bestTune[ ,1]`** retained terms using **`r mars_fit$bestTune[ ,2]`** degree of interactions generated the lowest RMSE, indicating that these tuning parameters fit the best model, using all of the variable to predict out-of-state tuition.
+
++ Now, let's examine the partial dependence plot using the percentage of alumni who donate as an arbitrary predictor:
+
+```{r pdp}
+pdp::partial(mars_fit, pred.var = c("perc_alumni"), grid.resolution = 10) %>% autoplot()
+```
+
++ The above partial dependence plot of percentage of alumni who donate as a predictor for out-of-state tuition shows that percentage of alumni who donate does not have as strong of an effect on out-of-state tuition after the threshold of ~22%.
